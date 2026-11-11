@@ -568,3 +568,215 @@ plt.tight_layout()
 velocity_fig_path = OUT_DIR / 'velocity_timeseries.png'
 plt.savefig(velocity_fig_path, dpi=200)
 plt.show()
+
+
+# Stage 8: Google Earth KML Generation and Text Reporting
+
+# Validate prerequisites from earlier stages
+for var_name in ['elements', 'tracks', 'summaries', 'source_note', 'sim_start', 'sim_end', 'STEP_SECONDS']:
+    if var_name not in globals():
+        raise NameError(f"Missing variable '{var_name}' from preceding stages. Ensure all prior stages ran successfully.")
+
+# Register KML Namespaces
+ET.register_namespace('', 'http://www.opengis.net/kml/2.2')
+ET.register_namespace('gx', 'http://www.google.com/kml/ext/2.2')
+
+def hex_to_kml_color(plt_color):
+    """
+    Converts a matplotlib color (e.g. 'tab:blue') to KML standard hex color string format (aabbggrr).
+    """
+    h = mcolors.to_hex(plt_color).lstrip('#') # rrggbb
+    r, g, b = h[0:2], h[2:4], h[4:6]
+    return f"ff{b}{g}{r}" # full opacity (ff) + bb + gg + rr
+
+# Define the base KML XML Namespaces dict
+KML_NS = {
+    'xmlns': 'http://www.opengis.net/kml/2.2',
+    'xmlns:gx': 'http://www.google.com/kml/ext/2.2'
+}
+
+# ========================================== 
+# 1. CREATE orbit_tracks_ecef.kml (3D Paths) 
+# ========================================== 
+print("Generating orbit_tracks_ecef.kml...")
+kml_root = ET.Element('kml', **KML_NS)
+doc = ET.SubElement(kml_root, 'Document')
+name_el = ET.SubElement(doc, 'name')
+name_el.text = 'Multi-Satellite Orbits | Earth-fixed'
+
+# Create styles for each satellite
+for idx, el in enumerate(elements):
+    col_kml = hex_to_kml_color(COLORS[idx % len(COLORS)])
+    
+    style = ET.SubElement(doc, 'Style', id=f"style_{el['norad_id']}")
+    
+    # Icon Style
+    istyle = ET.SubElement(style, 'IconStyle')
+    color_is = ET.SubElement(istyle, 'color')
+    color_is.text = col_kml
+    icon = ET.SubElement(istyle, 'Icon')
+    href = ET.SubElement(icon, 'href')
+    href.text = 'http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png'
+    
+    # Line Style
+    lstyle = ET.SubElement(style, 'LineStyle')
+    color_ls = ET.SubElement(lstyle, 'color')
+    color_ls.text = col_kml
+    width = ET.SubElement(lstyle, 'width')
+    width.text = '3'
+
+# Populate placemarks
+for idx, track in enumerate(tracks):
+    el = elements[idx]
+    pm = ET.SubElement(doc, 'Placemark')
+    pm_name = ET.SubElement(pm, 'name')
+    pm_name.text = el['name']
+    style_url = ET.SubElement(pm, 'styleUrl')
+    style_url.text = f"#style_{el['norad_id']}"
+    
+    ls = ET.SubElement(pm, 'LineString')
+    alt_mode = ET.SubElement(ls, 'altitudeMode')
+    alt_mode.text = 'absolute'
+    
+    coords = ET.SubElement(ls, 'coordinates')
+    coord_strings = []
+    for pt in track:
+        # lon,lat,alt in meters
+        coord_strings.append(f"{pt['lon_deg']:.6f},{pt['lat_deg']:.6f},{pt['alt_km'] * 1000.0:.1f}")
+    coords.text = ' '.join(coord_strings)
+
+# Write file
+with open(OUT_DIR / 'orbit_tracks_ecef.kml', 'wb') as f:
+    ET.ElementTree(kml_root).write(f, encoding='utf-8', xml_declaration=True)
+
+# ========================================== 
+# 2. CREATE orbit_animation.kml (Timelines) 
+# ========================================== 
+print("Generating orbit_animation.kml...")
+kml_anim_root = ET.Element('kml', **KML_NS)
+doc_anim = ET.SubElement(kml_anim_root, 'Document')
+name_anim = ET.SubElement(doc_anim, 'name')
+name_anim.text = 'Multi-Satellite Ground Tracks | Animation'
+
+# Reuse styles for consistency
+for idx, el in enumerate(elements):
+    col_kml = hex_to_kml_color(COLORS[idx % len(COLORS)])
+    style = ET.SubElement(doc_anim, 'Style', id=f"style_anim_{el['norad_id']}")
+    
+    istyle = ET.SubElement(style, 'IconStyle')
+    color_is = ET.SubElement(istyle, 'color')
+    color_is.text = col_kml
+    icon = ET.SubElement(istyle, 'Icon')
+    href = ET.SubElement(icon, 'href')
+    href.text = 'http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png'
+    
+    lstyle = ET.SubElement(style, 'LineStyle')
+    color_ls = ET.SubElement(lstyle, 'color')
+    color_ls.text = col_kml
+    width = ET.SubElement(lstyle, 'width')
+    width.text = '3'
+
+# Populate animations using 60s sampling
+for idx, track in enumerate(tracks):
+    el = elements[idx]
+    pm = ET.SubElement(doc_anim, 'Placemark')
+    pm_name = ET.SubElement(pm, 'name')
+    pm_name.text = el['name']
+    style_url = ET.SubElement(pm, 'styleUrl')
+    style_url.text = f"#style_anim_{el['norad_id']}"
+    
+    # gx:MultiTrack element
+    mtrack = ET.SubElement(pm, '{http://www.google.com/kml/ext/2.2}MultiTrack')
+    
+    # Subsample points at 60s increments (since simulation step = 5s, select every 12th item)
+    sub_track = track[::12]
+    if track[-1] not in sub_track:
+        sub_track.append(track[-1])
+        
+    # Group into segments to avoid drawing raw connection lines across wrapping boundaries
+    segments = []
+    current_seg = []
+    
+    for pt_idx, pt in enumerate(sub_track):
+        if not current_seg:
+            current_seg.append(pt)
+        else:
+            prev_lon = current_seg[-1]['lon_deg']
+            curr_lon = pt['lon_deg']
+            
+            # If longitude jump exceeds 180, partition into a new sub-track
+            if abs(curr_lon - prev_lon) > 180.0:
+                segments.append(current_seg)
+                current_seg = [pt]
+            else:
+                current_seg.append(pt)
+                
+    if current_seg:
+        segments.append(current_seg)
+        
+    # Create a separate gx:Track for each segment
+    for seg in segments:
+        gxtrack = ET.SubElement(mtrack, '{http://www.google.com/kml/ext/2.2}Track')
+        alt_mode = ET.SubElement(gxtrack, 'altitudeMode')
+        alt_mode.text = 'clampToGround'
+        
+        for pt in seg:
+            # Time format: YYYY-MM-DDTHH:MM:SSZ
+            time_str = pt['time'].strftime('%Y-%m-%dT%H:%M:%SZ')
+            when = ET.SubElement(gxtrack, 'when')
+            when.text = time_str
+            
+            coord = ET.SubElement(gxtrack, '{http://www.google.com/kml/ext/2.2}coord')
+            coord.text = f"{pt['lon_deg']:.6f} {pt['lat_deg']:.6f} 0"
+
+# Write file
+with open(OUT_DIR / 'orbit_animation.kml', 'wb') as f:
+    ET.ElementTree(kml_anim_root).write(f, encoding='utf-8', xml_declaration=True)
+
+# ========================================== 
+# 3. CREATE orbit_report.txt (Plain Text Report)
+# ========================================== 
+print("Generating orbit_report.txt...")
+report_lines = [
+    "Satellite Orbit Report - built during Space Career Week 2026, GNSS Academy",
+    "=" * 75,
+    source_note,
+    f"Simulation Grid Window: {sim_start.strftime('%Y-%m-%d %H:%M:%S UTC')} to {sim_end.strftime('%Y-%m-%d %H:%M:%S UTC')} (Interval: {STEP_SECONDS}s)",
+    "Caveat: This analysis utilizes Kepler's unperturbed analytical model with spherical Earth approximations.",
+    "\n" + "="*40,
+    "ORBIT METRICS (SUMMARY)",
+    "="*40
+]
+report_lines.extend(summary_table(summaries))
+report_lines.extend([
+    "\n" + "="*40,
+    "CONVERTED CLASSICAL KEPLERIAN ELEMENTS",
+    "="*40
+])
+report_lines.extend(elements_table(elements))
+
+with open(OUT_DIR / 'orbit_report.txt', 'w', encoding='utf-8') as f:
+    f.write('\n'.join(report_lines))
+
+# ========================================== 
+# 4. ZIP ALL OUTPUTS 
+# ========================================== 
+print("Archiving outputs into 'satellite_orbit_outputs.zip'...")
+output_files = [
+    ('ground_tracks.png', OUT_DIR / 'ground_tracks.png'),
+    ('velocity_timeseries.png', OUT_DIR / 'velocity_timeseries.png'),
+    ('orbit_tracks_ecef.kml', OUT_DIR / 'orbit_tracks_ecef.kml'),
+    ('orbit_animation.kml', OUT_DIR / 'orbit_animation.kml'),
+    ('orbit_report.txt', OUT_DIR / 'orbit_report.txt')
+]
+
+zip_out_path = OUT_DIR / 'satellite_orbit_outputs.zip'
+with zipfile.ZipFile(zip_out_path, 'w') as zipf:
+    for arc_name, file_path in output_files:
+        if file_path.is_file():
+            zipf.write(file_path, arcname=arc_name)
+            print(f" Packaged: {arc_name}")
+        else:
+            print(f" Error: Expected file not found to zip: {file_path}")
+
+print(f"\n=== Stage 8 Completed successfully! Zip generated at {zip_out_path} ===")
