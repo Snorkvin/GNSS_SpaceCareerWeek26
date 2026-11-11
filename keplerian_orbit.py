@@ -94,6 +94,8 @@ def extract_inputs():
                     out_f.write(ref.read(member))
                 print(f" Extracted: {name} -> {target_path}")
 
+
+
 def read_gp_json(path):
     """
     Loads a CelesTrak OMM JSON file and validates that each record contains the necessary elements.
@@ -117,6 +119,7 @@ def read_gp_json(path):
 
 # --- Execution ---
 extract_inputs()
+
 
 # Load files
 sats = read_gp_json(IN_DIR / 'orbital_elements.json')
@@ -213,6 +216,75 @@ for line in table_lines:
     print(line)
 
 
+
+# Optional Extension: Live CelesTrak Data Ingestion
+
+# Ensure Stage 1 and Stage 2 variables are loaded
+if 'LIVE_GROUP' not in globals() or 'sats' not in globals():
+    raise NameError("Missing configuration variables. Please run Stage 1 and Stage 2 cells first.")
+
+if LIVE_GROUP is None:
+    print("LIVE_GROUP is None. Using the default workshop snapshot data.")
+else:
+    cache_path = IN_DIR / f"gp_{LIVE_GROUP.lower()}.json"
+    two_hours_seconds = 2 * 3600
+    download_needed = True
+    
+    # Check cache existence and age to respect CelesTrak's anti-polling guidelines
+    if cache_path.is_file():
+        file_age = time.time() - cache_path.stat().st_mtime
+        if file_age < two_hours_seconds:
+            download_needed = False
+            print(f"Using cached live data from local file: {cache_path.name} (age: {file_age/60:.1f} mins)")
+            
+    if download_needed:
+        url = f"https://celestrak.org/NORAD/elements/gp.php?GROUP={LIVE_GROUP}&FORMAT=JSON"
+        print(f"Downloading live GP data for group '{LIVE_GROUP}' from CelesTrak...")
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            live_records = resp.json()
+            
+            # Save validated JSON to cache
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(live_records, f)
+            print(f"Successfully downloaded and cached: {cache_path.name}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to retrieve live data from CelesTrak: {e}")
+            
+    # Load the cached live records
+    with open(cache_path, 'r', encoding='utf-8') as f:
+        live_records = json.load(f)
+        
+    # Validate and filter the live data
+    required_keys = {
+        'OBJECT_NAME', 'NORAD_CAT_ID', 'EPOCH', 'MEAN_MOTION',
+        'ECCENTRICITY', 'INCLINATION', 'RA_OF_ASC_NODE',
+        'ARG_OF_PERICENTER', 'MEAN_ANOMALY'
+    }
+    
+    valid_live_records = []
+    for i, rec in enumerate(live_records):
+        if all(k in rec for k in required_keys):
+            valid_live_records.append(rec)
+            
+    if not valid_live_records:
+        raise ValueError(f"No valid GP records found in the retrieved group '{LIVE_GROUP}'")
+        
+    # Sort by NORAD Catalog ID and keep only the first 4 satellites
+    sorted_live = sorted(valid_live_records, key=lambda x: int(x['NORAD_CAT_ID']))
+    sats = sorted_live[:4]
+    
+    # Format dynamic metadata note
+    retrieval_time_str = datetime.fromtimestamp(cache_path.stat().st_mtime, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    source_note = f"Live CelesTrak group '{LIVE_GROUP}', retrieved at: {retrieval_time_str}"
+    
+    print(f"\n{source_note}")
+    print(f"Overrode 'sats' with {len(sats)} active live records:\n")
+    for sat in sats:
+        print(f"- Name: {sat['OBJECT_NAME']:<20} | NORAD ID: {sat['NORAD_CAT_ID']:<6} | Epoch: {sat['EPOCH']}")
+
+        
 # Stage 4: Establish a Unified UTC Time Grid & Check Record Age
 
 # Ensure preceding stages executed and populated elements
