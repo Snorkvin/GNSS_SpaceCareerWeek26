@@ -387,4 +387,79 @@ for idx, el in enumerate(elements):
         p = track[pt_idx]
         print(f"  * {label:<6} Point | {p['time'].strftime('%H:%M:%S')} | Lat: {p['lat_deg']:7.2f}° | Lon: {p['lon_deg']:7.2f}° | Alt: {p['alt_km']:8.2f} km | Speed: {p['speed_km_s']:5.2f} km/s")
 
-        
+
+# Stage 6: Orbital Summary and Spacecraft Classification
+
+# Ensure preceding stages executed and populated required elements and tracks
+if 'elements' not in globals() or 'tracks' not in globals():
+    raise NameError("Missing 'elements' or 'tracks' from previous stages. Ensure Stages 3 and 5 ran successfully.")
+
+def orbit_summary(el, pts):
+    """
+    Computes key Keplerian and dynamic properties of an orbit, incorporating
+    empirical velocity limits calculated during propagation.
+    """
+    a = el['a_km']
+    e = el['e']
+    n = el['n_rad_s']
+    
+    # Analytical Calculations
+    period_h = (2.0 * math.pi) / n / 3600.0
+    perigee_km = a * (1.0 - e) - EARTH_RADIUS_KM
+    apogee_km = a * (1.0 + e) - EARTH_RADIUS_KM
+    i_deg = math.degrees(el['i_rad'])
+    
+    # Dynamic Calculations
+    speeds = [pt['speed_km_s'] for pt in pts]
+    min_speed = min(speeds)
+    max_speed = max(speeds)
+    
+    return {
+        'name': el['name'],
+        'norad_id': el['norad_id'],
+        'period_h': period_h,
+        'perigee_km': perigee_km,
+        'apogee_km': apogee_km,
+        'e': e,
+        'i_deg': i_deg,
+        'min_speed': min_speed,
+        'max_speed': max_speed
+    }
+
+def summary_table(summaries_list):
+    """
+    Generates formatted lines of a diagnostic summary table.
+    """
+    headers = (f"{'Satellite Name':<18} | {'NORAD':<6} | "
+               f"{'Period (h)':<10} | {'Perigee (km)':<12} | {'Apogee (km)':<11} | "
+               f"{'e':<8} | {'i (deg)':<7} | {'Min V (km/s)':<12} | {'Max V (km/s)':<12}")
+    separator = "-" * len(headers)
+    lines = [headers, separator]
+    
+    for s in summaries_list:
+        line = (f"{s['name'][:18]:<18} | "
+                f"{s['norad_id']:<6} | "
+                f"{s['period_h']:<10.2f} | "
+                f"{s['perigee_km']:<12.1f} | "
+                f"{s['apogee_km']:<11.1f} | "
+                f"{s['e']:<8.6f} | "
+                f"{s['i_deg']:<7.2f} | "
+                f"{s['min_speed']:<12.3f} | "
+                f"{s['max_speed']:<12.3f}")
+        lines.append(line)
+    return lines
+
+# --- Process Summaries ---
+summaries = [orbit_summary(el, pts) for el, pts in zip(elements, tracks)]
+
+# --- Display Table ---
+summary_lines = summary_table(summaries)
+print("=== Stage 6: Satellite Orbit Summaries ===")
+for line in summary_lines:
+    print(line)
+
+# --- Verification Assertion ---
+for s in summaries:
+    if s['norad_id'] == 59598:  # Galileo 29
+        assert 14.0 <= s['period_h'] <= 14.2, f"Galileo 29 period of {s['period_h']:.2f} h fell outside expected [14.0, 14.2] range."
+        print(f"\n[PASSED] Verified Galileo 29 orbital period: {s['period_h']:.2f} hours.")
