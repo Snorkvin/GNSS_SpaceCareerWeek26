@@ -211,3 +211,180 @@ elements = [parse_gp_elements(s) for s in sats]
 table_lines = elements_table(elements)
 for line in table_lines:
     print(line)
+
+
+# Stage 4: Establish a Unified UTC Time Grid & Check Record Age
+
+# Ensure preceding stages executed and populated elements
+if 'elements' not in globals() or not elements:
+    raise NameError("Missing 'elements' list from Stage 3. Make sure to run Stage 2 and 3 first.")
+
+# 1. Identify the newest epoch in our elements list
+newest_epoch = max(el['epoch'] for el in elements)
+
+# 2. Floor this newest epoch to UTC midnight to establish a clean starting baseline
+sim_start = newest_epoch.replace(hour=0, minute=0, second=0, microsecond=0)
+sim_end = sim_start + timedelta(hours=DURATION_HOURS)
+
+# 3. Create the time grid (including both start and end endpoints)
+total_seconds = int((sim_end - sim_start).total_seconds())
+n_points = (total_seconds // STEP_SECONDS) + 1
+times = [sim_start + timedelta(seconds=i * STEP_SECONDS) for i in range(n_points)]
+
+# --- Diagnostics output ---
+print("=== Stage 4: Unified Time Grid ===")
+print(f"Newest Epoch in Data   : {newest_epoch.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+print(f"Simulation Start (UTC) : {sim_start.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+print(f"Simulation End (UTC)   : {sim_end.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+print(f"Step Interval          : {STEP_SECONDS} seconds")
+print(f"Total Time Points      : {n_points:,}\n")
+
+print("--- Satellite Epoch Offset (Age) Analysis ---")
+for el in elements:
+    # Calculate offset in fractional days
+    offset_delta = sim_start - el['epoch']
+    offset_days = offset_delta.total_seconds() / 86400.0
+    
+    # Check if the record is older than 7 days (stale)
+    stale_flag = "[STALE RECORD]" if offset_days > 7.0 else "[FRESH]"
+    
+    print(f"- {el['label']:<25} | Age relative to sim start: {offset_days:6.2f} days | Status: {stale_flag}")
+
+
+# Stage 5: Analytical Two-Body Keplerian Orbit Propagator
+
+# Verification of prior dependencies
+if 'elements' not in globals() or 'times' not in globals():
+    raise NameError("Missing 'elements' list or simulation 'times' grid. Run prior stages first.")
+
+def solve_kepler(M, e):
+    """
+    Solves Kepler's Equation M = E - e * sin(E) using Newton-Raphson iteration.
+    """
+    # 1. Select starting estimate based on eccentricity
+    E = math.pi if e > 0.8 else M
+    tol = 1e-12
+    max_iter = 50
+    
+    for _ in range(max_iter):
+        f = E - e * math.sin(E) - M
+        f_prime = 1.0 - e * math.cos(E)
+        delta = f / f_prime
+        E_next = E - delta
+        if abs(delta) < tol:
+            return E_next
+        E = E_next
+        
+    raise ValueError(f"Kepler solver failed to converge. M={M}, e={e}")
+
+def gmst_rad(t):
+    """
+    Calculates Greenwich Mean Sidereal Time (GMST) in radians for a given UTC datetime.
+    Uses IAU-1982 formulation (Meeus formula 12.4).
+    """
+    # J2000 epoch is January 1, 2000, at 12:00 UTC
+    j2000 = datetime(2000, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    d = (t - j2000).total_seconds() / 86400.0
+    T = d / 36525.0
+    
+    # Angle in degrees
+    theta_deg = 280.46061837 + 360.98564736629 * d + 0.000387933 * (T ** 2) - (T ** 3) / 38710000.0
+    return math.radians(theta_deg % 360.0)
+
+# --- Verification Assertions ---
+# 1. GMST at J2000 is approximately 280.46 degrees
+j2000_check_time = datetime(2000, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+assert abs(math.degrees(gmst_rad(j2000_check_time)) - 280.46061837) < 1e-5, "GMST at J2000 calculation discrepancy."
+
+# 2. Kepler residual error check
+for test_M, test_e in [(0.5, 0.1), (1.5, 0.7), (3.0, 0.05)]:
+    test_E = solve_kepler(test_M, test_e)
+    residual = abs(test_E - test_e * math.sin(test_E) - test_M)
+    assert residual < 1e-10, f"Newton-Raphson failed precision threshold: residual={residual}"
+
+def propagate(el, time_grid):
+    """
+    Propagates a satellite's orbit across a sequence of datetimes under two-body physics.
+    """
+    track = []
+    a = el['a_km']
+    e = el['e']
+    i = el['i_rad']
+    raan = el['raan_rad']
+    argp = el['argp_rad']
+    M0 = el['M0_rad']
+    epoch = el['epoch']
+    n = el['n_rad_s']
+    
+    for t in time_grid:
+        # Step 1: Mean Anomaly computation
+        dt_sec = (t - epoch).total_seconds()
+        M = (M0 + n * dt_sec) % (2.0 * math.pi)
+        
+        # Step 2: Solve Kepler's equation for Eccentric Anomaly
+        E = solve_kepler(M, e)
+        
+        # Step 3: Compute radial distance, true anomaly, and argument of latitude
+        r = a * (1.0 - e * math.cos(E))
+        nu = math.atan2(math.sqrt(1.0 - e ** 2) * math.sin(E), math.cos(E) - e)
+        u = argp + nu
+        
+        # Step 4: Map coordinates to geocentric equatorial inertial frame (ECI)
+        cos_u, sin_u = math.cos(u), math.sin(u)
+        cos_raan, sin_raan = math.cos(raan), math.sin(raan)
+        cos_i, sin_i = math.cos(i), math.sin(i)
+        
+        x = r * (cos_raan * cos_u - sin_raan * sin_u * cos_i)
+        y = r * (sin_raan * cos_u + cos_raan * sin_u * cos_i)
+        z = r * sin_u * sin_i
+        
+        # Step 5: Rotate into Earth-centered Earth-fixed (ECEF) frame using GMST
+        theta = gmst_rad(t)
+        cos_t, sin_t = math.cos(theta), math.sin(theta)
+        xp = cos_t * x + sin_t * y
+        yp = -sin_t * x + cos_t * y
+        
+        # Step 6: Convert ECEF coordinates to geodetic latitude, longitude, and altitude
+        lat_rad = math.atan2(z, math.hypot(xp, yp))
+        lon_rad = math.atan2(yp, xp)
+        
+        lat_deg = math.degrees(lat_rad)
+        lon_deg = math.degrees(lon_rad)
+        alt_km = r - EARTH_RADIUS_KM
+        
+        # Step 7: Instantaneous vis-viva speed
+        speed_km_s = math.sqrt(MU_EARTH_KM3_S2 * (2.0 / r - 1.0 / a))
+        
+        track.append({
+            'time': t,
+            'lat_deg': lat_deg,
+            'lon_deg': lon_deg,
+            'alt_km': alt_km,
+            'speed_km_s': speed_km_s
+        })
+        
+    return track
+
+# --- Perform Propagation ---
+tracks = [propagate(el, times) for el in elements]
+
+# 3. Assert longitudinal behavior for geostationary satellite SES-5 if present
+for idx, el in enumerate(elements):
+    if el['norad_id'] == 38652:  # SES-5
+        ses5_track = tracks[idx]
+        for point in ses5_track:
+            lon = point['lon_deg']
+            # Normalize longitude to [-180, 180]
+            lon_norm = (lon + 180) % 360 - 180
+            assert 4.0 <= lon_norm <= 6.0, f"SES-5 drifted outside [4, 6]° East. Found: {lon_norm}°"
+
+# --- Display Propagation Diagnostics ---
+print("=== Propagation Completed Successfully ===")
+for idx, el in enumerate(elements):
+    track = tracks[idx]
+    print(f"\nSatellite: {el['label']}")
+    for label, pt_idx in [("First", 0), ("Middle", len(track) // 2), ("Last", -1)]:
+        p = track[pt_idx]
+        print(f"  * {label:<6} Point | {p['time'].strftime('%H:%M:%S')} | Lat: {p['lat_deg']:7.2f}° | Lon: {p['lon_deg']:7.2f}° | Alt: {p['alt_km']:8.2f} km | Speed: {p['speed_km_s']:5.2f} km/s")
+
+        
