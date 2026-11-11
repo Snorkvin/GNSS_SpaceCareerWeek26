@@ -1,0 +1,59 @@
+{
+  "assembled_on_utc": "2026-11-10",
+  "retrieved_utc": "2026-11-10T16:30:32Z",
+  "format": "GP JSON using OMM field names (native CelesTrak API download, four satellites)",
+  "provenance_note": "Native CelesTrak GP JSON, one query per satellite (gp.php?CATNR=<id>&FORMAT=JSON), retrieved on 2026-11-10. Records have different epochs: PULSAR-0, SES-5 and GALILEO 29 are fresh, QZS-2 (2026-10-17) is the oldest record available. No orbital model conversion was performed.",
+  "reference_start_utc": "2026-11-10T00:00:00Z",
+  "source_records": [
+    {
+      "norad_cat_id": 64541,
+      "object_name": "PULSAR-0",
+      "epoch_utc": "2026-11-10T04:10:34.900320Z",
+      "source_url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=64541&FORMAT=JSON",
+      "source_representation": "Native CelesTrak GP JSON (OMM field names)",
+      "tle_lines_same_element_set": [
+        "1 64541U 25135P   26314.17401505  .00003852  00000+0  17686-3 0  9993",
+        "2 64541  97.4838  67.6279 0004075  54.1589 306.0025 15.20996364 77012"
+      ]
+    },
+    {
+      "norad_cat_id": 59598,
+      "object_name": "GSAT0225 (GALILEO 29)",
+      "epoch_utc": "2026-11-09T08:30:06.579648Z",
+      "source_url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=59598&FORMAT=JSON",
+      "source_representation": "Native CelesTrak GP JSON (OMM field names)",
+      "tle_lines_same_element_set": [
+        "1 59598U 24079A   26313.35424282  .00000009  00000+0  00000+0 0  9990",
+        "2 59598  55.2189  97.0227 0001590 171.2097 226.8931  1.70474554 15797"
+      ]
+    },
+    {
+      "norad_cat_id": 38652,
+      "object_name": "SES-5",
+      "epoch_utc": "2026-11-10T04:02:09.139776Z",
+      "source_url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=38652&FORMAT=JSON",
+      "source_representation": "Native CelesTrak GP JSON (OMM field names)",
+      "tle_lines_same_element_set": [
+        "1 38652U 12036A   26314.16816134  .00000044  00000+0  00000+0 0  9998",
+        "2 38652   0.0509  32.2008 0001910 188.0056 254.6756  1.00273386 45929"
+      ]
+    },
+    {
+      "norad_cat_id": 42738,
+      "object_name": "QZS-2 (MICHIBIKI-2)",
+      "epoch_utc": "2026-10-17T15:21:52.982784Z",
+      "source_url": "https://celestrak.org/NORAD/elements/gp.php?CATNR=42738&FORMAT=JSON",
+      "source_representation": "Native CelesTrak GP JSON (OMM field names)",
+      "tle_lines_same_element_set": [
+        "1 42738U 17028A   26290.64019656 -.00000204  00000+0  00000+0 0  9993",
+        "2 42738  39.2498 241.3539 0745208 270.8929 243.8231  1.00251730  8854"
+      ]
+    }
+  ],
+  "refresh_url_template": "https://celestrak.org/NORAD/elements/gp.php?CATNR={NORAD_CAT_ID}&FORMAT=JSON",
+  "known_limitations": [
+    "QZS-2 epoch is 2026-10-17: display epoch age and treat its common-window trajectory as a stale-data teaching example.",
+    "Kepler propagation of GP mean elements is an educational approximation.",
+    "The JSON eccentricity has more digits than the seven-digit TLE field; the two encodings describe the same element set."
+  ]
+}
