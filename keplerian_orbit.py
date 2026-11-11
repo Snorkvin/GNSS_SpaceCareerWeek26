@@ -130,4 +130,84 @@ print(f"Loaded {len(sats)} satellite record(s):\n")
 for sat in sats:
     print(f"- Name: {sat['OBJECT_NAME']:<20} | NORAD ID: {sat['NORAD_CAT_ID']:<6} | Epoch: {sat['EPOCH']}")
 
+
+def parse_gp_epoch(text):
+    """
+    Parses a UTC ISO format timestamp from CelesTrak (without offset/with trailing Z)
+    to a Python UTC-aware datetime.
+    """
+    clean_text = text.rstrip('Z')
+    # Use timezone-aware UTC datetime
+    return datetime.fromisoformat(clean_text).replace(tzinfo=timezone.utc)
+
+def parse_gp_elements(rec):
+    """
+    Converts a raw GP record (dict) into classical orbital elements in model units (km, rad, rad/s).
+    """
+    name = rec['OBJECT_NAME']
+    norad_id = int(rec['NORAD_CAT_ID'])
+    epoch = parse_gp_epoch(rec['EPOCH'])
     
+    # Mean motion: rev/day -> rad/s
+    n_rev_day = float(rec['MEAN_MOTION'])
+    n_rad_s = n_rev_day * (2.0 * math.pi) / 86400.0
+    
+    # Semi-major axis from Kepler's Third Law: a = (mu / n^2) ^ (1/3)
+    a_km = (MU_EARTH_KM3_S2 / (n_rad_s ** 2)) ** (1.3 / 3.0)  # Correct Keplerian 1/3 exponent
+    a_km = (MU_EARTH_KM3_S2 / (n_rad_s ** 2)) ** (1.0 / 3.0)
+    
+    e = float(rec['ECCENTRICITY'])
+    
+    # Degrees to Radians
+    i_rad = math.radians(float(rec['INCLINATION']))
+    raan_rad = math.radians(float(rec['RA_OF_ASC_NODE']))
+    argp_rad = math.radians(float(rec['ARG_OF_PERICENTER']))
+    M0_rad = math.radians(float(rec['MEAN_ANOMALY']))
+    
+    return {
+        'name': name,
+        'norad_id': norad_id,
+        'label': f"{name} [{norad_id}]",
+        'epoch': epoch,
+        'n_rad_s': n_rad_s,
+        'a_km': a_km,
+        'e': e,
+        'i_rad': i_rad,
+        'raan_rad': raan_rad,
+        'argp_rad': argp_rad,
+        'M0_rad': M0_rad
+    }
+
+def elements_table(elements_list):
+    """
+    Returns a list of formatted lines representing a summary table of converted elements.
+    """
+    headers = f"{'Satellite Name':<18} | {'NORAD':<6} | {'Epoch (UTC)':<19} | {'a (km)':<9} | {'e':<8} | {'i (deg)':<7} | {'Ω (deg)':<7} | {'ω (deg)':<7} | {'M0 (deg)':<7}"
+    separator = "-" * len(headers)
+    lines = [headers, separator]
+    
+    for el in elements_list:
+        epoch_str = el['epoch'].strftime('%Y-%m-%d %H:%M:%S')
+        line = (f"{el['name'][:18]:<18} | "
+                f"{el['norad_id']:<6} | "
+                f"{epoch_str:<19} | "
+                f"{el['a_km']:<9.2f} | "
+                f"{el['e']:<8.6f} | "
+                f"{math.degrees(el['i_rad']):<7.2f} | "
+                f"{math.degrees(el['raan_rad']):<7.2f} | "
+                f"{math.degrees(el['argp_rad']):<7.2f} | "
+                f"{math.degrees(el['M0_rad']):<7.2f}")
+        lines.append(line)
+    return lines
+
+# Check if input 'sats' exists from Stage 2
+if 'sats' not in globals():
+    raise NameError("Missing list of satellites 'sats'. Make sure Stage 2 executed successfully.")
+
+# --- Convert Elements ---
+elements = [parse_gp_elements(s) for s in sats]
+
+# --- Display Elements Table ---
+table_lines = elements_table(elements)
+for line in table_lines:
+    print(line)
