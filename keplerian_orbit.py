@@ -463,3 +463,108 @@ for s in summaries:
     if s['norad_id'] == 59598:  # Galileo 29
         assert 14.0 <= s['period_h'] <= 14.2, f"Galileo 29 period of {s['period_h']:.2f} h fell outside expected [14.0, 14.2] range."
         print(f"\n[PASSED] Verified Galileo 29 orbital period: {s['period_h']:.2f} hours.")
+
+# Stage 7: Visualizing Ground Tracks and Velocity Profiles
+
+# Ensure preceding stages executed and populated tracks and elements
+if 'tracks' not in globals() or 'elements' not in globals():
+    raise NameError("Missing 'tracks' or 'elements' variables from preceding stages. Make sure Stages 3 and 5 ran successfully.")
+
+def load_coastline(path):
+    """
+    Parses world_map.txt. Each line contains 'latitude longitude' (latitude first).
+    Blank lines separate distinct coastline segments.
+    """
+    segments = []
+    current_segment = []
+    
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                if current_segment:
+                    segments.append(current_segment)
+                    current_segment = []
+            else:
+                parts = line.split()
+                if len(parts) >= 2:
+                    lat = float(parts[0])
+                    lon = float(parts[1])
+                    current_segment.append((lon, lat)) # Save as (lon, lat) tuple
+                    
+    if current_segment:
+        segments.append(current_segment)
+        
+    return segments
+
+# Define color palette for consistent plotting (one color per satellite)
+COLORS = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red']
+
+# --- Plot Figure 1: Ground Tracks over World Map ---
+print("Generating Ground Tracks Plot...")
+plt.figure(figsize=(14, 8))
+
+# 1. Plot coastline segments
+coastline_path = IN_DIR / 'world_map.txt'
+if coastline_path.is_file():
+    segments = load_coastline(coastline_path)
+    for seg in segments:
+        lons, lats = zip(*seg)
+        plt.plot(lons, lats, color='gray', linewidth=0.8, alpha=0.7)
+else:
+    print("Warning: world_map.txt not found. Plotting without coastlines.")
+
+# 2. Plot satellite ground tracks
+for idx, track in enumerate(tracks):
+    el = elements[idx]
+    lons = [pt['lon_deg'] for pt in track]
+    lats = [pt['lat_deg'] for pt in track]
+    
+    # Normalize longitudes to [-180, 180] to avoid lines jumping across boundaries
+    norm_lons = [(lon + 180) % 360 - 180 for lon in lons]
+    
+    # Use scatter with small dots to avoid lines stretching across the plot boundary
+    plt.scatter(norm_lons, lats, s=2, color=COLORS[idx % len(COLORS)], label=el['label'])
+
+plt.title('Satellite Ground Tracks (24-Hour Simulation)')
+plt.xlabel('Longitude (deg)')
+plt.ylabel('Latitude (deg)')
+plt.xlim(-180, 180)
+plt.ylim(-90, 90)
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend(loc='lower left', markerscale=6)
+plt.tight_layout()
+
+# Save ground tracks figure
+ground_track_fig_path = OUT_DIR / 'ground_tracks.png'
+plt.savefig(ground_track_fig_path, dpi=200)
+plt.show()
+
+# --- Plot Figure 2: Velocity Timeseries Stacked Subplots ---
+print("\nGenerating Velocity Profiles...")
+fig, axs = plt.subplots(len(elements), 1, figsize=(12, 3 * len(elements)), sharex=True)
+if len(elements) == 1:
+    axs = [axs]
+
+for idx, track in enumerate(tracks):
+    el = elements[idx]
+    ax = axs[idx]
+    
+    times_plot = [pt['time'] for pt in track]
+    speeds = [pt['speed_km_s'] for pt in track]
+    
+    ax.plot(times_plot, speeds, color=COLORS[idx % len(COLORS)], linewidth=2, label=el['name'])
+    
+    ax.set_ylabel('Speed (km/s)')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.ticklabel_format(axis='y', useOffset=False) # Suppress offset notation on y-axis
+    ax.legend(loc='upper right')
+    ax.set_title(f"Velocity Profile: {el['label']}", fontsize=10)
+
+plt.xlabel('UTC Time')
+plt.tight_layout()
+
+# Save velocity timeseries figure
+velocity_fig_path = OUT_DIR / 'velocity_timeseries.png'
+plt.savefig(velocity_fig_path, dpi=200)
+plt.show()
